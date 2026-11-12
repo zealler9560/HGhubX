@@ -396,6 +396,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   /* 音量/静音同步 */
   useEffect(() => { videoRef.current?.mute(muted); }, [muted]);
   useEffect(() => { videoRef.current?.volume(volume); }, [volume]);
+  /* 静音按钮走手势同步链：先直接切元素（取消静音的播放恢复在 handle 内），
+     再更新 state；只改 state 等 effect 异步同步会丢用户手势，WebView 上
+     表现为开声音后画面冻结。 */
+  const toggleMute = () => {
+    const next = !muted;
+    videoRef.current?.mute(next);
+    setMuted(next);
+  };
   /* 倍速同步（长按 2x / 锁定 2x / 基准倍速） */
   useEffect(() => { videoRef.current?.rate(effRate); }, [effRate, playKey]);
 
@@ -421,7 +429,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         case "ArrowRight": e.preventDefault(); videoRef.current?.seek(time + 5, "keyboard_shortcut"); break;
         case "f": case "F": toggleFull(); break;
         case "t": case "T": setTheater((v) => !v); break;
-        case "m": case "M": setMuted((v) => !v); break;
+        case "m": case "M": {
+          // 与按钮同一条手势同步链（元素状态为当前真值）
+          const el = videoRef.current?.el();
+          const next = el ? !el.muted : true;
+          videoRef.current?.mute(next);
+          setMuted(next);
+          break;
+        }
         case "l": case "L": onLike(); break;
         case "s": case "S": onFav(); break;
         case "c": case "C": setPanel("comments"); break;
@@ -1186,7 +1201,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           onSeek={(t, source) => { videoRef.current?.seek(t, source); setTime(t); }}
           onSeekInteraction={(phase, input, target, pointerTarget) => videoRef.current?.trace(`seek.input.${phase}`, { input, target, pointer_target: pointerTarget })}
           onRate={(r) => { setRate(r); videoRef.current?.rate(r); }}
-          onMute={() => setMuted((m) => !m)}
+          onMute={toggleMute}
           onVolume={(v) => setVolume(v)}
           onPip={togglePip}
           onLock={lockControls}
@@ -1403,7 +1418,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
             top: rotated ? 12 : "calc(var(--sat, 0px) + 6px)",
             right: fs ? (rotated ? "calc(var(--sab, 0px) + 56px)" : 56) : undefined,
           }}>
-          {!fs && !clean && <button onClick={() => setMuted(m => !m)} aria-label={muted ? "取消静音" : "静音"}
+          {!fs && !clean && <button onClick={toggleMute} aria-label={muted ? "取消静音" : "静音"}
             className="hg-chip w-9 h-9 rounded-full flex items-center justify-center pressable elev-1">
             {muted ? <IVolMute size={17} /> : <IVol size={17} />}
           </button>}

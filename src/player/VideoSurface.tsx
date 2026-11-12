@@ -2,6 +2,7 @@ import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "re
 import type Hls from "hls.js";
 import { mediaErrorMessage, mediaResource, usePlaybackActivity, usePlayerDiagnostics } from "./diagnostics";
 import { createPlaybackEngine, type PlaybackEngine } from "./engine";
+import { onUnmute } from "./unmute";
 
 export type VideoHandle = {
   el: () => HTMLVideoElement | null;
@@ -49,6 +50,33 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   const hlsRef = useRef<Hls | null>(null);
   const engineRef = useRef<PlaybackEngine | null>(null);
   const nearEndFiredRef = useRef(false);
+  const unmuteCleanupRef = useRef<(() => void) | null>(null);
+
+  /* 静音切换的唯一入口：手势里同步设元素，并对「取消静音」做播放恢复。
+     只依赖 refs，可被只挂载一次的命令式 handle 安全捕获。 */
+  const applyMute = (m: boolean) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const wasMuted = v.muted;
+    const wasPlaying = !v.paused && !v.ended;
+    v.muted = m;
+    if (m) {
+      unmuteCleanupRef.current?.();
+      unmuteCleanupRef.current = null;
+      return;
+    }
+    if (!wasMuted) return; // 状态没变（重复同步），不动已武装的看门狗
+    unmuteCleanupRef.current?.();
+    unmuteCleanupRef.current = null;
+    if (!wasPlaying) return; // 用户本来就暂停着，不替他恢复播放
+    unmuteCleanupRef.current = onUnmute(v, (t) => {
+      // 帧冻结时原地重锚：从当前点重新加载并重设 currentTime，不跳进度
+      engineRef.current?.seek(t);
+      try { v.currentTime = t; } catch { /* 忽略 */ }
+      const p = v.play();
+      if (p && p.catch) p.catch(() => {});
+    });
+  };
   const [ready, setReady] = useState(false);
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay, src, trace });
@@ -85,7 +113,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     },
     trace,
     rate: (r: number) => { const v = videoRef.current; if (v) v.playbackRate = r; },
-    mute: (m: boolean) => { const v = videoRef.current; if (v) v.muted = m; },
+    mute: (m: boolean) => applyMute(m),
     volume: (vol: number) => { const v = videoRef.current; if (v) v.volume = vol; },
   }), []);
 
@@ -122,6 +150,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
 
     return () => {
       video.removeEventListener("resize", onVideoResize);
+      unmuteCleanupRef.current?.();
+      unmuteCleanupRef.current = null;
       engine.destroy();
       if (engineRef.current === engine) engineRef.current = null;
       if (hlsRef.current === engineHls) hlsRef.current = null;
@@ -135,7 +165,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     if (v) v.setAttribute("webkit-playsinline", "true");
   }, []);
 
-  useEffect(() => { if (videoRef.current) videoRef.current.muted = muted; }, [muted]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { applyMute(muted); }, [muted]);
   useEffect(() => { if (videoRef.current) videoRef.current.volume = volume; }, [volume]);
   useEffect(() => { if (videoRef.current) videoRef.current.playbackRate = rate; }, [rate]);
 

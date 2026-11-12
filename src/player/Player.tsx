@@ -6,6 +6,7 @@ import {
   mediaErrorMessage, mediaResource, usePlaybackActivity, usePlayerDiagnostics, useSeekInput,
 } from "./diagnostics";
 import PlaybackLock from "./PlaybackLock";
+import { onUnmute } from "./unmute";
 import { ICompress, IExpand, ILockF, IPauseF, IPlayF, IVol, IVolMute } from "../icons";
 
 type Props = {
@@ -32,6 +33,32 @@ export default function Player({
   const wrapRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const engineRef = useRef<PlaybackEngine | null>(null);
+  const unmuteCleanupRef = useRef<(() => void) | null>(null);
+
+  /* 静音切换的唯一入口（与 VideoSurface 同一策略）：同步设元素，
+     「取消静音」时做播放恢复，避免只靠 effect 异步同步丢用户手势。 */
+  const applyMute = (m: boolean) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const wasMuted = v.muted;
+    const wasPlaying = !v.paused && !v.ended;
+    v.muted = m;
+    if (m) {
+      unmuteCleanupRef.current?.();
+      unmuteCleanupRef.current = null;
+      return;
+    }
+    if (!wasMuted) return;
+    unmuteCleanupRef.current?.();
+    unmuteCleanupRef.current = null;
+    if (!wasPlaying) return;
+    unmuteCleanupRef.current = onUnmute(v, (t) => {
+      engineRef.current?.seek(t);
+      try { v.currentTime = t; } catch { /* 忽略 */ }
+      const p = v.play();
+      if (p && p.catch) p.catch(() => {});
+    });
+  };
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { view: "post_detail", ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay: !!autoPlay, src, trace });
   const [playing, setPlaying] = useState(false);
@@ -77,17 +104,16 @@ export default function Player({
     const engineHls = engine.hls;
     hlsRef.current = engineHls;
     return () => {
+      unmuteCleanupRef.current?.();
+      unmuteCleanupRef.current = null;
       engine.destroy();
       if (engineRef.current === engine) engineRef.current = null;
       if (hlsRef.current === engineHls) hlsRef.current = null;
     };
   }, [src, autoPlay]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.muted = muted;
-  }, [muted]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { applyMute(muted); }, [muted]);
 
   // iOS 内联播放：部分 WKWebView 只认 HTML 属性，不认 React 的 playsInline
   useEffect(() => {
@@ -184,7 +210,7 @@ export default function Player({
             <button onClick={toggle} aria-label={playing ? "暂停" : "播放"} className="pressable">
               {playing ? <IPauseF size={16} /> : <IPlayF size={16} />}
             </button>
-            <button onClick={() => onToggleMute?.()} aria-label={muted ? "取消静音" : "静音"} className="pressable">
+            <button onClick={() => { applyMute(!muted); onToggleMute?.(); }} aria-label={muted ? "取消静音" : "静音"} className="pressable">
               {muted ? <IVolMute size={16} /> : <IVol size={16} />}
             </button>
             <span className="text-[11px] tabular-nums text-white/85">{fmtTime(seek.time)} / {fmtTime(duration)}</span>
