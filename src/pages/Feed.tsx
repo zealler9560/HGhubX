@@ -404,6 +404,16 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     videoRef.current?.mute(next);
     setMuted(next);
   };
+  /* 音量滑块同样走同步链：拖到 0 即静音、从 0 拖出即取消静音，
+     先切元素再更新 state（store 的 setVolume 会联动 muted）。 */
+  const changeVolume = (v: number) => {
+    const el = videoRef.current?.el();
+    if (el) {
+      if (v > 0 && el.muted) videoRef.current?.mute(false);
+      else if (v === 0 && !el.muted) videoRef.current?.mute(true);
+    }
+    setVolume(v);
+  };
   /* 倍速同步（长按 2x / 锁定 2x / 基准倍速） */
   useEffect(() => { videoRef.current?.rate(effRate); }, [effRate, playKey]);
 
@@ -1202,7 +1212,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           onSeekInteraction={(phase, input, target, pointerTarget) => videoRef.current?.trace(`seek.input.${phase}`, { input, target, pointer_target: pointerTarget })}
           onRate={(r) => { setRate(r); videoRef.current?.rate(r); }}
           onMute={toggleMute}
-          onVolume={(v) => setVolume(v)}
+          onVolume={changeVolume}
           onPip={togglePip}
           onLock={lockControls}
           onTheater={() => setTheater((v) => !v)}

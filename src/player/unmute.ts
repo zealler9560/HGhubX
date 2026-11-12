@@ -48,7 +48,8 @@ export function onUnmute(video: HTMLVideoElement, resync: (t: number) => void): 
     loop();
     timers.push(window.setTimeout(() => {
       if (cancelled || frames >= 5 || video.muted || video.paused || video.ended) return;
-      if (document.visibilityState !== "visible" || video.readyState < 2) return;
+      // 缓冲/定位中本就不出帧，不算冻结：要求已有后续数据（HAVE_FUTURE_DATA）
+      if (document.visibilityState !== "visible" || video.readyState < 3 || video.seeking) return;
       resync(video.currentTime);
     }, 700));
   } else {
@@ -56,6 +57,7 @@ export function onUnmute(video: HTMLVideoElement, resync: (t: number) => void): 
     const t0 = video.currentTime;
     timers.push(window.setTimeout(() => {
       if (cancelled || video.muted || video.paused || video.ended) return;
+      if (video.readyState < 3 || video.seeking) return;
       if (video.currentTime <= t0 + 0.05) resync(video.currentTime);
     }, 700));
   }
